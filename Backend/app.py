@@ -1,3 +1,5 @@
+from services.bert_model import predict_emotion
+
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 
@@ -10,15 +12,18 @@ def home():
 
 @app.route("/predict", methods=["POST"])
 def predict():
-    data = request.json
-    text = data.get("text")
+    data = request.get_json()
+    text = data.get("text", "")
 
-    # Temporary dummy output
+    if not text:
+        return jsonify({"error": "No text provided"}), 400
+
+    # BERT Prediction
+    emotion_result = predict_emotion(text)
+
     return jsonify({
-        "text": text,
-        "emotion": "Stress",
-        "sentiment": "Negative",
-        "risk": "High"
+        "emotion": emotion_result["label"],
+        "confidence": emotion_result["score"]
     })
 
 if __name__ == "__main__":

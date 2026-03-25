@@ -45,69 +45,46 @@ Major-Project/
 
 ---
 
-## 🚀 Features Implemented (Till Now)
+Work Completed (Backend)
 
-### ✅ Backend Setup
+🔹 Project Setup
+Created structured project folders (backend/, frontend/)
+Set up and configured Python virtual environment
+Installed required dependencies and generated requirements.txt
 
-* Flask server created
-* API endpoint `/predict` implemented
+🔹 API Development
+Built Flask backend (app.py)
+Created /predict API endpoint
+Tested API using Thunder Client
 
-### ✅ API Testing
+🔹 Data Preprocessing
+Implemented robust text preprocessing
+Handled messy dataset using custom parsing
+Mapped emotion labels with fallback handling (unknown)
 
-* Successfully tested using Thunder Client
-* Returns JSON response
+🔹 AI Integration
+Integrated pre-trained BERT model for emotion detection
+Implemented predict_emotion() using Transformers
+Successfully tested real-time predictions
 
-### ✅ Text Preprocessing
+🔹 Git & Collaboration
+Initialized GitHub repository
+Managed .gitignore (excluded datasets & venv)
+Followed proper Git workflow (pull → commit → push)
+Synced with team changes
 
-* Lowercasing
-* Removing special characters
-* Cleaning input text
+🚀 Current Features
+Real-time emotion detection from text
+REST API for prediction (/predict)
+Clean and scalable backend structure
 
-### ✅ Dataset Integration
+⏭️ Next Steps
+Implement stress/risk prediction model (ML)
+Integrate both models into API
+Connect frontend with backend
 
-* Organized datasets into:
-
-  * BERT (text-based)
-  * Risk (numerical data)
-
-### ✅ Version Control
-
-* Git repository initialized
-* Proper `.gitignore` added
-* Code pushed to GitHub
-
----
-
-## 🔄 System Architecture
-
-### 1. NLP Model (Planned)
-
-* Input: Text
-* Output: Emotion + Sentiment
-
-### 2. Risk Prediction Model (Planned)
-
-* Input: Numerical features
-* Output: Stress Level
-
----
-
-## 📌 Current Status
-
-* Backend working ✅
-* API functional ✅
-* Dataset prepared ✅
-* Ready for model integration 🚀
-
----
-
-## 📌 Next Steps
-
-* Data preprocessing & cleaning
-* Model integration (BERT)
-* Risk model training
-* Frontend integration
-
+💡 Note
+Datasets are not included in the repository and are managed locally for better performance and version control.
 
 *API Testing:<img width="500" height="150" alt="image" src="https://github.com/user-attachments/assets/57759cf7-6df0-42e4-aa31-5206233d2112" />
 

@@ -22,6 +22,7 @@ It combines Natural Language Processing (NLP) and Machine Learning (ML) to gener
 🔹 Robust error handling
 
 🧱 Project Structure
+
 <img width="185" height="748" alt="image" src="https://github.com/user-attachments/assets/87313c10-0492-44ff-9a98-78b10b96ced5" />
 
 ⚙️ Setup Instructions
@@ -99,11 +100,14 @@ This project is for academic and research purposes.
 💡 Note
 Datasets are not included in the repository and are managed locally for better performance and version control.
 
-*API Testing:<img width="400" height="150" alt="image" src="https://github.com/user-attachments/assets/57759cf7-6df0-42e4-aa31-5206233d2112" />
+*API Testing:
+
+<img width="500" height="150" alt="image" src="https://github.com/user-attachments/assets/57759cf7-6df0-42e4-aa31-5206233d2112" />
 
 <img width="350" height="250" alt="image" src="https://github.com/user-attachments/assets/f0c8fe7f-c946-4558-8b8f-3fca387a2ede" />
 
 The system gracefully handles invalid inputs and ensures stability.
+
 <img width="300" height="200" alt="image" src="https://github.com/user-attachments/assets/13870196-ba64-47a6-9f7c-23826051e64a" />
 
 

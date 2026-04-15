@@ -90,4 +90,8 @@ Datasets are not included in the repository and are managed locally for better p
 
 <img width="746" height="243" alt="image" src="https://github.com/user-attachments/assets/f0c8fe7f-c946-4558-8b8f-3fca387a2ede" />
 
+The system gracefully handles invalid inputs and ensures stability.
+<img width="705" height="692" alt="image" src="https://github.com/user-attachments/assets/13870196-ba64-47a6-9f7c-23826051e64a" />
+
+
 

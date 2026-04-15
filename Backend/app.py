@@ -1,3 +1,4 @@
+from services.risk_model import predict_risk
 from services.bert_model import predict_emotion
 
 from flask import Flask, request, jsonify
@@ -12,19 +13,29 @@ def home():
 
 @app.route("/predict", methods=["POST"])
 def predict():
-    data = request.get_json()
-    text = data.get("text", "")
+    try:
+        data = request.json
+        text = data.get("text")
 
-    if not text:
-        return jsonify({"error": "No text provided"}), 400
+        if not text:
+            return jsonify({"error": "No text provided"}), 400
 
-    # BERT Prediction
-    emotion_result = predict_emotion(text)
+        emotion = predict_emotion(text)
 
-    return jsonify({
-        "emotion": emotion_result["label"],
-        "confidence": emotion_result["score"]
-    })
+        sample_input = [14,20,0,11,2,1,2,4,2,3,3,2,3,2,3,3,2,3,3,2]
+        risk = predict_risk(sample_input)
+
+        return jsonify({
+            "input": text,
+            "analysis": {
+                "emotion": emotion,
+                "risk_level": risk
+            },
+            "status": "success"
+        })
+
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 if __name__ == "__main__":
     app.run(debug=True)

@@ -4,84 +4,120 @@ Title : Emotion and sentiment analysis using in Students Advance AI
 *Run project using : pip install -r requirements.txt (No neend to install libraries again)
 *http://127.0.0.1:5000/
 
-# 🧠 Mental Health Analysis System
+📌 Overview
 
-## 📌 Project Overview
+This backend is built using Flask and provides a REST API for analyzing user mental health based on:
 
-This project aims to analyze user text and predict:
+Text input (emotion + sentiment)
+Questionnaire data (stress/risk assessment)
 
-* Emotion
-* Sentiment
-* Stress/Risk level
+It combines Natural Language Processing (NLP) and Machine Learning (ML) to generate a final risk level along with recommendations.
 
-The system combines NLP techniques and machine learning models.
+# Features
+🔹 Emotion Detection using Transformer-based model
+🔹 Stress/Risk Prediction using ML model
+🔹 Hybrid Intelligence (combines emotion + risk score)
+🔹 Recommendation System based on final risk
+🔹 REST API for frontend integration
+🔹 Robust error handling
 
----
+🧱 Project Structure
+backend/
+│
+├── data/
+│   ├── bert/
+│   │   ├── dev.tsv
+│   │   ├── test.tsv
+│   │   ├── emotions.txt
+│   │   └── sentiment140_clean.csv
+│   │
+│   └── risk/
+│       └── StressLevelDataset.csv
+│
+├── services/
+│   ├── bert_model.py        # Emotion detection model
+│   ├── risk_model.py        # Stress prediction model
+│   ├── data_preprocessing.py
+│   ├── test_bert.py
+│   └── test_data.py
+│
+├── app.py                  # Main Flask API
+├── models.py
+├── utils.py
+├── requirements.txt
+└── venv/ (ignored)
 
-## ⚙️ Tech Stack
+⚙️ Setup Instructions
+1. Clone Repository
+git clone https://github.com/HARSHITA-SRIVASTAVA/Major-Project-
+cd Major-Project-/Backend
+2. Create Virtual Environment
+python -m venv venv
+3. Activate Virtual Environment
 
-* Python
-* Flask (Backend API)
-* Transformers (BERT - planned)
-* Scikit-learn
-* Pandas
+Windows:
 
----
+.\venv\Scripts\activate
+4. Install Dependencies
+pip install -r requirements.txt
 
-## 📁 Project Structure
+#Running the Backend
+python app.py
 
-```
-Major-Project/
- ├── backend/
- │     ├── app.py
- │     ├── model.py
- │     ├── utils.py
- │     ├── requirements.txt
- │     ├── data/
- │           ├── bert/
- │           ├── risk/
- ├── frontend/
-```
+Server will start at:
 
----
+http://127.0.0.1:5000
 
-Work Completed (Backend)
+# API Endpoint
+POST /predict
+Request Body
+{
+  "text": "I feel stressed and anxious",
+  "questionnaire": {
+    "anxiety_level": 14,
+    "self_esteem": 20,
+    "sleep_quality": 2,
+    "academic_pressure": 3,
+    "social_support": 2
+  }
+}
 
-🔹 Project Setup
-Created structured project folders (backend/, frontend/)
-Set up and configured Python virtual environment
-Installed required dependencies and generated requirements.txt
+#Response
+{
+  "input": "I feel stressed and anxious",
+  "analysis": {
+    "emotion": "sadness",
+    "risk_score": 1,
+    "final_risk": "Medium",
+    "recommendation": "Try relaxation techniques and take regular breaks."
+  },
+  "status": "success"
+}
 
-🔹 API Development
-Built Flask backend (app.py)
-Created /predict API endpoint
-Tested API using Thunder Client
+#System Workflow
+User input (text + questionnaire)
+Text → Emotion detection (BERT model)
+Questionnaire → Risk prediction (ML model)
+Hybrid logic combines both outputs
+Final risk level generated
+Recommendation provided
 
-🔹 Data Preprocessing
-Implemented robust text preprocessing
-Handled messy dataset using custom parsing
-Mapped emotion labels with fallback handling (unknown)
+#Notes
+Datasets are not included in the repository (managed locally)
+Virtual environment (venv/) is ignored via .gitignore
+Flask development server is used (not for production)
+🔮 Future Improvements
+Chatbot integration
+Multi-language support
+Real-time monitoring system
+Deployment (AWS / GCP)
+Advanced dashboard
 
-🔹 AI Integration
-Integrated pre-trained BERT model for emotion detection
-Implemented predict_emotion() using Transformers
-Successfully tested real-time predictions
+👥 Team
+Developed as a final year major project by a team of four members.
 
-🔹 Git & Collaboration
-Initialized GitHub repository
-Managed .gitignore (excluded datasets & venv)
-Followed proper Git workflow (pull → commit → push)
-Synced with team changes
-
-🚀 Current Features
-Real-time emotion detection from text
-REST API for prediction (/predict)
-Clean and scalable backend structure
-
-⏭️ Next Steps
-Implement stress/risk prediction model (ML)
-Integrate both models into API
-Connect frontend with backend
+📄 License
+This project is for academic and research purposes.
 
 💡 Note
 Datasets are not included in the repository and are managed locally for better performance and version control.

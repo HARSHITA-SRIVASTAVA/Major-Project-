@@ -86,6 +86,32 @@ const store = {
     try { localStorage.setItem(key, JSON.stringify(value)); } catch {}
   },
 };
+// ─── BACKEND API HELPER ───────────────────────────────────────────────────────
+// Calls POST /api/predict on the Flask backend (proxied by Vite in dev).
+// The backend now handles all scaling internally — we just send raw 1-5 slider
+// values and the raw text. No inversion needed on the frontend side.
+const API_BASE = import.meta.env.VITE_API_URL ?? "";
+
+async function analyseWithBackend(text, questionnaireAnswers = {}) {
+  const res = await fetch(`${API_BASE}/api/predict`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      text,
+      questionnaire: {
+        anxiety_level:     questionnaireAnswers.anxiety_level     ?? 3,
+        self_esteem:       questionnaireAnswers.self_esteem        ?? 3,
+        sleep_quality:     questionnaireAnswers.sleep_quality      ?? 3,
+        academic_pressure: questionnaireAnswers.academic_pressure  ?? 3,
+        social_support:    questionnaireAnswers.social_support     ?? 3,
+      },
+    }),
+  });
+  if (!res.ok) throw new Error(`Backend error ${res.status}`);
+  return res.json();
+}
+
+
 
 // ─── SHARED UI COMPONENTS ─────────────────────────────────────────────────────
 function Card({ children, style = {} }) {
@@ -436,7 +462,12 @@ function DailyCheckin({ onCheckin }) {
   const [done, setDone] = useState(false);
   const toggleTag = t => setTags(ts => ts.includes(t) ? ts.filter(x => x !== t) : [...ts, t]);
 
-  const submit = () => {
+  // INTEGRATION: analysis state from backend
+  const [analysis, setAnalysis]             = useState(null);
+  const [analysisLoading, setAnalysisLoading] = useState(false);
+  const [analysisError, setAnalysisError]   = useState(null);
+
+  const submit = async () => {
     if (!selected) return;
     const now = new Date();
     onCheckin({
@@ -452,21 +483,79 @@ function DailyCheckin({ onCheckin }) {
       isCheckin: true,
     });
     setDone(true);
+
+    // INTEGRATION: send note text to backend — mood label used as fallback if note is empty
+    const textToSend = note.trim() || `I am feeling ${selected} today.`;
+    setAnalysisLoading(true);
+    setAnalysisError(null);
+    try {
+      const result = await analyseWithBackend(textToSend, {
+        // Map selected mood to rough slider values so the RF model gets
+        // some signal even when the full questionnaire hasn't been filled
+        anxiety_level:     selected === "Stressed" ? 5 : selected === "Sad" ? 4 : selected === "Okay" ? 3 : 1,
+        self_esteem:       selected === "Joyful"   ? 5 : selected === "Calm" ? 4 : selected === "Okay" ? 3 : 2,
+        sleep_quality:     selected === "Joyful"   ? 5 : selected === "Calm" ? 4 : 2,
+        academic_pressure: selected === "Stressed" ? 5 : selected === "Sad"  ? 4 : 3,
+        social_support:    selected === "Joyful"   ? 5 : selected === "Calm" ? 4 : 2,
+      });
+      setAnalysis(result.analysis);
+    } catch {
+      setAnalysisError("Could not reach the backend. Is the Flask server running on port 5000?");
+    } finally {
+      setAnalysisLoading(false);
+    }
   };
 
   if (done) {
     const m = moodMeta(selected);
+    const riskColor = { High: C.blushDark, Medium: C.peachDark, Low: C.sageDark };
+    const riskBg    = { High: C.blush,     Medium: C.peach,     Low: C.sage     };
     return (
-      <Card style={{ background: C.lavender }}>
-        <div style={{ textAlign: "center", padding: "2rem 0" }}>
-          <div style={{ fontSize: 48, marginBottom: 12 }}>{m.emoji}</div>
-          <h2 style={{ fontFamily: "'Lora', serif", fontStyle: "italic", fontSize: 20, color: C.lavenderDark, fontWeight: 400, margin: "0 0 8px" }}>Check-in saved to your journal!</h2>
-          <p style={{ fontSize: 14, color: C.textMuted, margin: 0 }}>Feeling <strong>{selected}</strong> — great job showing up for yourself.</p>
-          <button onClick={() => { setDone(false); setSelected(null); setNote(""); setTags([]); }} style={{ marginTop: 16, padding: "8px 20px", borderRadius: 10, border: `1px solid ${C.lavenderDark}`, background: C.white, color: C.lavenderDark, cursor: "pointer", fontSize: 13, fontFamily: "'DM Sans', sans-serif" }}>
-            Check in again
-          </button>
-        </div>
-      </Card>
+      <div style={{ display: "flex", flexDirection: "column", gap: "1rem" }}>
+        <Card style={{ background: C.lavender }}>
+          <div style={{ textAlign: "center", padding: "2rem 0" }}>
+            <div style={{ fontSize: 48, marginBottom: 12 }}>{m.emoji}</div>
+            <h2 style={{ fontFamily: "'Lora', serif", fontStyle: "italic", fontSize: 20, color: C.lavenderDark, fontWeight: 400, margin: "0 0 8px" }}>Check-in saved to your journal!</h2>
+            <p style={{ fontSize: 14, color: C.textMuted, margin: 0 }}>Feeling <strong>{selected}</strong> — great job showing up for yourself.</p>
+            <button onClick={() => { setDone(false); setSelected(null); setNote(""); setTags([]); setAnalysis(null); setAnalysisError(null); }} style={{ marginTop: 16, padding: "8px 20px", borderRadius: 10, border: `1px solid ${C.lavenderDark}`, background: C.white, color: C.lavenderDark, cursor: "pointer", fontSize: 13, fontFamily: "'DM Sans', sans-serif" }}>
+              Check in again
+            </button>
+          </div>
+        </Card>
+
+        {analysisLoading && (
+          <Card><p style={{ fontSize: 13, color: C.textMuted, textAlign: "center", padding: "1rem 0" }}>🔍 Analysing your entry…</p></Card>
+        )}
+        {analysisError && (
+          <Card style={{ border: `1px solid ${C.blushMid}` }}>
+            <p style={{ fontSize: 13, color: C.blushDark, textAlign: "center", padding: "0.5rem 0" }}>⚠️ {analysisError}</p>
+          </Card>
+        )}
+        {analysis && !analysisLoading && (
+          <Card style={{ background: riskBg[analysis.final_risk] ?? C.cream }}>
+            <p style={{ fontSize: 11, letterSpacing: "0.8px", textTransform: "uppercase", color: C.textLight, margin: "0 0 1rem" }}>Wellness Analysis</p>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: "0.75rem", marginBottom: "1rem" }}>
+              <div style={{ textAlign: "center" }}>
+                <p style={{ fontSize: 11, color: C.textMuted, margin: "0 0 4px" }}>Detected Emotion</p>
+                <p style={{ fontSize: 15, fontWeight: 500, color: C.text, margin: 0, textTransform: "capitalize" }}>{analysis.emotion?.label ?? "—"}</p>
+                <p style={{ fontSize: 11, color: C.textLight, margin: 0 }}>{analysis.emotion?.score ? `${Math.round(analysis.emotion.score * 100)}% confidence` : ""}</p>
+              </div>
+              <div style={{ textAlign: "center" }}>
+                <p style={{ fontSize: 11, color: C.textMuted, margin: "0 0 4px" }}>Risk Level</p>
+                <p style={{ fontSize: 16, fontWeight: 700, color: riskColor[analysis.final_risk] ?? C.text, margin: 0 }}>{analysis.final_risk}</p>
+              </div>
+              <div style={{ textAlign: "center" }}>
+                <p style={{ fontSize: 11, color: C.textMuted, margin: "0 0 4px" }}>Stress Score</p>
+                <p style={{ fontSize: 15, fontWeight: 500, color: C.text, margin: 0 }}>{analysis.risk_score} / 2</p>
+              </div>
+            </div>
+            <div style={{ background: C.white, borderRadius: 10, padding: "10px 14px", border: `1px solid ${C.border}` }}>
+              <p style={{ fontSize: 11, color: C.textMuted, margin: "0 0 4px" }}>Recommendation</p>
+              <p style={{ fontSize: 13, color: C.text, margin: 0, lineHeight: 1.5 }}>{analysis.recommendation}</p>
+            </div>
+          </Card>
+        )}
+      </div>
     );
   }
 
@@ -672,25 +761,105 @@ function WeeklyReview() {
   const [type, setType] = useState("weekly");
   const [answers, setAnswers] = useState({});
   const [done, setDone] = useState(false);
+  // INTEGRATION: analysis state
+  const [analysis, setAnalysis]               = useState(null);
+  const [analysisLoading, setAnalysisLoading] = useState(false);
+  const [analysisError, setAnalysisError]     = useState(null);
   const questions = type === "weekly" ? WEEKLY_Q : MONTHLY_Q;
   const avg = Object.values(answers).length ? (Object.values(answers).reduce((a, b) => a + b, 0) / Object.values(answers).length).toFixed(1) : null;
 
-  if (done) return (
+  // INTEGRATION: Map questionnaire answers to backend field names.
+  // Values are sent as raw 1-5 — the backend scales them to the dataset range.
+  // Weekly Q: study(0), social(1), self_care(2), confidence(3), balance(4)
+  // Monthly Q: academic(0), sleep(1), motivation(2), financial(3), support(4)
+  const buildQuestionnaire = () => {
+    if (type === "weekly") {
+      return {
+        academic_pressure: answers[0] ?? 3,   // study schedule (low score = high pressure)
+        social_support:    answers[1] ?? 3,
+        sleep_quality:     answers[2] ?? 3,   // self-care proxy
+        self_esteem:       answers[3] ?? 3,   // confidence proxy
+        anxiety_level:     answers[4] ?? 3,   // overall balance (low score = high anxiety)
+      };
+    }
+    return {
+      academic_pressure: answers[0] ?? 3,
+      sleep_quality:     answers[1] ?? 3,
+      self_esteem:       answers[2] ?? 3,   // motivation proxy
+      anxiety_level:     answers[3] ?? 3,   // financial stress proxy
+      social_support:    answers[4] ?? 3,
+    };
+  };
+
+  const handleSubmit = async () => {
+    setDone(true);
+    setAnalysisLoading(true);
+    setAnalysisError(null);
+    const summaryText = `My overall ${type} wellbeing score is ${avg} out of 5.`;
+    try {
+      const result = await analyseWithBackend(summaryText, buildQuestionnaire());
+      setAnalysis(result.analysis);
+    } catch {
+      setAnalysisError("Could not reach the backend. Is the Flask server running on port 5000?");
+    } finally {
+      setAnalysisLoading(false);
+    }
+  };
+
+  if (done) {
+    const riskColor = { High: C.blushDark, Medium: C.peachDark, Low: C.sageDark };
+    const riskBg    = { High: C.blush,     Medium: C.peach,     Low: C.sage     };
+    return (
     <div>
       <div style={{ marginBottom: "2rem" }}>
         <h1 style={{ fontFamily: "'Lora', serif", fontSize: 26, color: C.text, fontWeight: 500, margin: 0 }}>Weekly Review</h1>
         <p style={{ fontSize: 14, color: C.textMuted, marginTop: 4 }}>Reflect on your week</p>
       </div>
-      <Card style={{ background: C.sage }}>
-        <div style={{ textAlign: "center", padding: "1.5rem 0" }}>
-          <div style={{ fontSize: 40, marginBottom: 8 }}>🌿</div>
-          <p style={{ fontFamily: "'Lora', serif", fontStyle: "italic", fontSize: 20, color: C.sageDark }}>Score: {avg} / 5</p>
-          <p style={{ fontSize: 14, color: C.sageDark }}>Your {type} reflection is recorded!</p>
-          <button onClick={() => { setDone(false); setAnswers({}); }} style={{ marginTop: 12, padding: "8px 20px", borderRadius: 10, border: `1px solid ${C.sageDark}`, background: C.white, color: C.sageDark, cursor: "pointer", fontFamily: "'DM Sans', sans-serif", fontSize: 13 }}>Retake</button>
-        </div>
-      </Card>
+      <div style={{ display: "flex", flexDirection: "column", gap: "1rem" }}>
+        <Card style={{ background: C.sage }}>
+          <div style={{ textAlign: "center", padding: "1.5rem 0" }}>
+            <div style={{ fontSize: 40, marginBottom: 8 }}>🌿</div>
+            <p style={{ fontFamily: "'Lora', serif", fontStyle: "italic", fontSize: 20, color: C.sageDark }}>Score: {avg} / 5</p>
+            <p style={{ fontSize: 14, color: C.sageDark }}>Your {type} reflection is recorded!</p>
+            <button onClick={() => { setDone(false); setAnswers({}); setAnalysis(null); setAnalysisError(null); }} style={{ marginTop: 12, padding: "8px 20px", borderRadius: 10, border: `1px solid ${C.sageDark}`, background: C.white, color: C.sageDark, cursor: "pointer", fontFamily: "'DM Sans', sans-serif", fontSize: 13 }}>Retake</button>
+          </div>
+        </Card>
+        {analysisLoading && (
+          <Card><p style={{ fontSize: 13, color: C.textMuted, textAlign: "center", padding: "1rem 0" }}>🔍 Analysing your responses…</p></Card>
+        )}
+        {analysisError && (
+          <Card style={{ border: `1px solid ${C.blushMid}` }}>
+            <p style={{ fontSize: 13, color: C.blushDark, textAlign: "center", padding: "0.5rem 0" }}>⚠️ {analysisError}</p>
+          </Card>
+        )}
+        {analysis && !analysisLoading && (
+          <Card style={{ background: riskBg[analysis.final_risk] ?? C.cream }}>
+            <p style={{ fontSize: 11, letterSpacing: "0.8px", textTransform: "uppercase", color: C.textLight, margin: "0 0 1rem" }}>Wellness Analysis</p>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: "0.75rem", marginBottom: "1rem" }}>
+              <div style={{ textAlign: "center" }}>
+                <p style={{ fontSize: 11, color: C.textMuted, margin: "0 0 4px" }}>Detected Emotion</p>
+                <p style={{ fontSize: 15, fontWeight: 500, color: C.text, margin: 0, textTransform: "capitalize" }}>{analysis.emotion?.label ?? "—"}</p>
+                <p style={{ fontSize: 11, color: C.textLight, margin: 0 }}>{analysis.emotion?.score ? `${Math.round(analysis.emotion.score * 100)}% confidence` : ""}</p>
+              </div>
+              <div style={{ textAlign: "center" }}>
+                <p style={{ fontSize: 11, color: C.textMuted, margin: "0 0 4px" }}>Risk Level</p>
+                <p style={{ fontSize: 16, fontWeight: 700, color: riskColor[analysis.final_risk] ?? C.text, margin: 0 }}>{analysis.final_risk}</p>
+              </div>
+              <div style={{ textAlign: "center" }}>
+                <p style={{ fontSize: 11, color: C.textMuted, margin: "0 0 4px" }}>Stress Score</p>
+                <p style={{ fontSize: 15, fontWeight: 500, color: C.text, margin: 0 }}>{analysis.risk_score} / 2</p>
+              </div>
+            </div>
+            <div style={{ background: C.white, borderRadius: 10, padding: "10px 14px", border: `1px solid ${C.border}` }}>
+              <p style={{ fontSize: 11, color: C.textMuted, margin: "0 0 4px" }}>Recommendation</p>
+              <p style={{ fontSize: 13, color: C.text, margin: 0, lineHeight: 1.5 }}>{analysis.recommendation}</p>
+            </div>
+          </Card>
+        )}
+      </div>
     </div>
   );
+  }
 
   return (
     <div>
@@ -729,7 +898,7 @@ function WeeklyReview() {
             </div>
           </div>
         ))}
-        <SubmitBtn onClick={() => setDone(true)} disabled={Object.keys(answers).length < questions.length} color={C.sageDark}>
+        <SubmitBtn onClick={handleSubmit} disabled={Object.keys(answers).length < questions.length} color={C.sageDark}>
           Submit Review
         </SubmitBtn>
       </Card>

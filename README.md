@@ -1,25 +1,25 @@
-# Major-Project-
-Title : Emotion and sentiment analysis using in Students Advance AI
+# 🎓 AI-Based Student Mental Health & Sentiment Analysis System
 
-*Run project using : pip install -r requirements.txt (No neend to install libraries again)
-*http://127.0.0.1:5000/
+## 📌 Overview
 
-📌 Overview
+This project is a Flask-based backend system that provides a REST API to analyze student mental health using:
 
-This backend is built using Flask and provides a REST API for analyzing user mental health based on:
+* Text input (emotion and sentiment analysis)
+* Questionnaire data (stress and risk assessment)
 
-Text input (emotion + sentiment)
-Questionnaire data (stress/risk assessment)
+It integrates **Natural Language Processing (NLP)** and **Machine Learning (ML)** techniques to generate a final risk level along with personalized recommendations.
 
-It combines Natural Language Processing (NLP) and Machine Learning (ML) to generate a final risk level along with recommendations.
+---
 
-# Features
-🔹 Emotion Detection using Transformer-based model
-🔹 Stress/Risk Prediction using ML model
-🔹 Hybrid Intelligence (combines emotion + risk score)
-🔹 Recommendation System based on final risk
-🔹 REST API for frontend integration
-🔹 Robust error handling
+## 🚀 Features
+
+🔹 Emotion Detection using a Transformer-based model (BERT)
+🔹 Stress & Risk Prediction using Machine Learning
+🔹 Hybrid Intelligence (combining emotion analysis + questionnaire score)
+🔹 Recommendation System based on predicted risk level
+🔹 REST API for seamless frontend integration
+🔹 Robust error handling and input validation
+
 
 🧱 Project Structure
 

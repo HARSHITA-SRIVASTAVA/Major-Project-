@@ -3,7 +3,7 @@ import os
 from dotenv import load_dotenv
 from flask import Flask, request, jsonify
 from flask_cors import CORS
-import google.generativeai as genai
+from google import genai
 
 from services.risk_model import predict_risk
 from services.bert_model import predict_emotion
@@ -18,17 +18,12 @@ GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-1.5-flash")
 llm = None
 
+client = None
+
 if GEMINI_API_KEY:
-    genai.configure(api_key=GEMINI_API_KEY)
-    llm = genai.GenerativeModel(
-        GEMINI_MODEL,
-        generation_config={
-            "temperature": 0.6,
-            "max_output_tokens": 120,
-        },
-    )
+    client = genai.Client(api_key=GEMINI_API_KEY)
 else:
-    print("WARNING: GEMINI_API_KEY not set — using CASTLE rule-based recommendations only.")
+    print("WARNING: GEMINI_API_KEY not set")
 
 # Expanded to catch distress types across the GoEmotions spectrum
 NEGATIVE_EMOTIONS = {
@@ -72,14 +67,9 @@ def has_academic_misconduct(text_lower):
 def has_career_despair(text_lower):
     if _matches_any(text_lower, ("hate coding", "family forced", "forced me", "feel trapped", "trapped in this degree")):
         return True
-    
-    # Adding spaces ensures we check for whole words, preventing false matches on substrings like 'in'
-    path_words = (" degree ", " career ", " engineering ", " coding ")
-    despair_words = (" forced ", " trapped ", " hate ", " misaligned ")
-    
-    # Pad the text with spaces to handle edge cases where words start or end the entry
-    padded_text = f" {text_lower} "
-    return any(p in padded_text for p in path_words) and any(d in padded_text for d in despair_words)
+    path_words = ("degree", "career", "engineering", "coding")
+    despair_words = ("forced", "trapped", "hate", "misaligned")
+    return any(p in text_lower for p in path_words) and any(d in text_lower for d in despair_words)
 
 
 def calculate_final_risk(emotion_result, risk_score):
@@ -191,49 +181,144 @@ def generate_dynamic_recommendation(text, emotion_label, final_risk, days_until_
     Use Gemini Flash to write a short empathetic recommendation from BERT + RF + calendar context.
     Falls back to CASTLE rules if the API key is missing or the call fails.
     """
-    if llm is None:
+    if client is None:
         return get_castle_aligned_recommendation(
             final_risk, emotion_label, text, days_until_deadline, is_weekend
         )
 
     deadline_str = "none" if days_until_deadline is None else str(days_until_deadline)
+    # Human-friendly academic context
+    if days_until_deadline is None:
+        deadline_context = "There are no upcoming academic deadlines."
+        urgency = "None"
+    elif days_until_deadline == 0:
+        deadline_context = "An assignment or exam is due today."
+        urgency = "Critical"
+    elif days_until_deadline == 1:
+        deadline_context = "An assignment or exam is due tomorrow."
+        urgency = "Critical"
+    elif days_until_deadline <= 3:
+        deadline_context = f"The next assignment or exam is in {days_until_deadline} days."
+        urgency = "Upcoming"
+    else:
+        deadline_context = f"The next assignment or exam is in {days_until_deadline} days."
+        urgency = "Low"
+
+    if is_weekend:
+        if days_until_deadline is not None and days_until_deadline <= 1:
+            weekend_context = (
+            "It is currently the weekend, but an important academic deadline is tomorrow or today."
+        )
+        else:
+            weekend_context = (
+            "It is currently the weekend with no immediate academic deadline."
+        )
+    else:
+        weekend_context = "It is currently a weekday."
 
     prompt = f"""
-You are an empathetic wellness assistant for university students.
+You are MindBloom, an AI-powered wellness assistant designed to support university students.
 
-A student just wrote this journal entry: "{text}"
+A student has written the following journal entry:
 
-Our internal diagnostic models evaluated this entry and concluded:
-- Primary Emotion: {emotion_label}
-- Structural Stress Risk: {final_risk}
-- Days until next academic deadline: {deadline_str}
-- Is it the weekend? {is_weekend}
+\"{text}\"
 
-Task: Write a highly empathetic, 2-to-3 sentence response to the student.
+Our internal AI analysis produced the following results:
 
-CRITICAL SAFETY RULES:
-1. If the text implies severe psychological distress, bullying, isolation, abuse, or home fear, ignore academic deadlines. Prioritize safety and strongly encourage a campus counselor or trusted adult.
-2. If the text implies cheating, plagiarism, or copying code to submit as their own, do NOT encourage finishing the work that way. Warn about academic standing and suggest honesty, an extension, or partial credit.
-3. If the text shows social withdrawal or depending only on an app for connection, set a gentle boundary and urge real-world human contact.
-4. If the text shows a fixed-mindset crash ("stupid", "failure", "not good enough"), reframe feedback as growth, not identity.
-5. If the text shows career/degree misalignment or family pressure into a path they hate, validate passions and suggest a campus career counselor.
-6. Do not sound robotic or use generic phrases like "As an AI...".
-7. If they are happy or calm, encourage enjoying the weekend or using clear headspace for their deadline.
-8. If they are stressed about a deadline (and none of the safety rules above apply), give actionable bite-sized study advice.
+Emotion Analysis:
+- Detected Emotion: {emotion_label}
+
+Stress Analysis:
+- Risk Level: {final_risk}
+
+Academic Context:
+- {deadline_context}
+- Academic Urgency: {urgency}
+- {weekend_context}
+
+Your task is to generate ONE personalized recommendation for the student.
+
+Write exactly one paragraph between 50 and 90 words.
+
+Writing Style:
+- Use warm, supportive, and professional language.
+- Sound like a trusted university mentor, not a therapist.
+- Never use pet names such as "honey", "sweetie", "dear", or "love".
+- Never mention that you are an AI.
+- Do not sound robotic or overly dramatic.
+- Avoid generic advice that could apply to anyone.
+- Reference one specific detail from the student's journal entry before giving advice.
+- End with one encouraging sentence.
+- If bullying or harassment is mentioned, encourage speaking with a trusted teacher, counselor, faculty member, parent, guardian, or another trusted adult, depending on what best fits the student's situation.
+
+Decision Rules:
+
+1. Emotional wellbeing ALWAYS comes before academic productivity.
+
+2. HIGH RISK:
+- Prioritize emotional safety and wellbeing.
+- If bullying, harassment, abuse, humiliation, panic, severe loneliness, hopelessness, or fear is present, focus almost entirely on emotional support.
+- Mention academic deadlines ONLY if they are today or tomorrow, and do so gently without adding pressure.
+
+3. MEDIUM RISK:
+- Validate the student's emotions first.
+- If an assignment or exam is approaching, suggest ONE small, manageable academic step.
+- Encourage healthy rest before returning to work.
+
+4. LOW RISK:
+- Encourage maintaining healthy habits.
+- Mention upcoming deadlines naturally if they are within the next few days.
+- Reinforce positive routines.
+
+5. Weekend Awareness:
+- If it is the weekend and there are no urgent deadlines, encourage healthy rest, hobbies, spending time with friends or family, or enjoying free time.
+- If it is the weekend but a deadline is today or tomorrow, encourage balancing rest with gentle preparation.
+- Never encourage ignoring an important deadline simply because it is the weekend.
+
+6. Calendar Awareness:
+- If there are no upcoming deadlines, do not invent academic pressure.
+- If the deadline is today or tomorrow, acknowledge it naturally.
+- If the student is emotionally overwhelmed, prioritize emotional recovery over productivity.
+
+7. Situation-Specific Guidance:
+- If bullying or cyberbullying is mentioned, prioritize safety, encourage saving evidence when appropriate, and recommend speaking with a trusted teacher, counselor, or another trusted adult.
+- If social isolation is mentioned, encourage reaching out to one trusted person rather than withdrawing further.
+- If academic dishonesty, cheating, plagiarism, or copying work is mentioned, encourage honesty and suggest healthier alternatives such as asking for help or requesting an extension.
+- If the student expresses self-criticism, failure, or low self-worth, gently reframe mistakes as opportunities for growth.
+- If the student expresses dissatisfaction with their degree or career path due to external pressure, encourage exploring their interests and speaking with a career advisor.
+
+8. Response Quality:
+- Do not repeat the detected emotion or risk level.
+- Do not simply summarize the journal entry.
+- Make the advice feel personalized to this specific student.
+- Give ONE practical action they can realistically take today.
+- Keep the response concise, natural, and emotionally intelligent.
+
+Output only the recommendation paragraph.
 """.strip()
-
     try:
-        response = llm.generate_content(prompt)
-        generated = (getattr(response, "text", None) or "").strip()
+        response = client.models.generate_content(
+        model=GEMINI_MODEL,
+        contents=prompt,
+    )
+
+        generated = (response.text or "").strip()
+
         if generated:
             return generated
+
         raise ValueError("Empty LLM response")
+
     except Exception as e:
         print(f"LLM Generation Error: {e}")
-        return get_castle_aligned_recommendation(
-            final_risk, emotion_label, text, days_until_deadline, is_weekend
-        )
 
+        return get_castle_aligned_recommendation(
+            final_risk,
+            emotion_label,
+            text,
+            days_until_deadline,
+            is_weekend
+        )
 
 def scale_slider(value, out_max):
     """

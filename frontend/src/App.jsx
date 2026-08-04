@@ -86,10 +86,8 @@ const store = {
     try { localStorage.setItem(key, JSON.stringify(value)); } catch {}
   },
 };
+
 // ─── BACKEND API HELPER ───────────────────────────────────────────────────────
-// Calls POST /api/predict on the Flask backend (proxied by Vite in dev).
-// The backend now handles all scaling internally — we just send raw 1-5 slider
-// values and the raw text. No inversion needed on the frontend side.
 const API_BASE = import.meta.env.VITE_API_URL ?? "";
 
 async function analyseWithBackend(text, questionnaireAnswers = {}) {
@@ -110,8 +108,6 @@ async function analyseWithBackend(text, questionnaireAnswers = {}) {
   if (!res.ok) throw new Error(`Backend error ${res.status}`);
   return res.json();
 }
-
-
 
 // ─── SHARED UI COMPONENTS ─────────────────────────────────────────────────────
 function Card({ children, style = {} }) {
@@ -472,38 +468,21 @@ function DailyCheckin({ onCheckin, events = [] }) {
     const todayStr = today.toISOString().split("T")[0];
     const isWeekend = today.getDay() === 0 || today.getDay() === 6;
 
-    // Prefer Exams over Assignments when both are upcoming
     const academicEvents = events
       .filter(e => e.date >= todayStr && (e.type === "Exam" || e.type === "Assignment"))
-      .sort((a, b) => {
-        const byDate = a.date.localeCompare(b.date);
-        if (byDate !== 0) return byDate;
-        if (a.type === "Exam" && b.type !== "Exam") return -1;
-        if (b.type === "Exam" && a.type !== "Exam") return 1;
-        return 0;
-      });
-
-    // If an Exam exists within 3 days, prefer that over a nearer Assignment further out
-    const examSoon = academicEvents.find(e => {
-      if (e.type !== "Exam") return false;
-      const target = new Date(e.date + "T00:00:00");
-      const current = new Date(today.getFullYear(), today.getMonth(), today.getDate());
-      const days = Math.ceil((target - current) / (1000 * 60 * 60 * 24));
-      return days >= 0 && days <= 3;
-    });
-
-    const nearest = examSoon || academicEvents[0] || null;
+      .sort((a, b) => a.date.localeCompare(b.date));
 
     let daysUntilDeadline = null;
     let upcomingEventType = null;
     let upcomingEventTitle = null;
 
-    if (nearest) {
-      const targetDate = new Date(nearest.date + "T00:00:00");
+    if (academicEvents.length > 0) {
+      const targetDate = new Date(academicEvents[0].date + "T00:00:00");
       const currentZeroed = new Date(today.getFullYear(), today.getMonth(), today.getDate());
-      daysUntilDeadline = Math.max(0, Math.ceil((targetDate - currentZeroed) / (1000 * 60 * 60 * 24)));
-      upcomingEventType = nearest.type;
-      upcomingEventTitle = nearest.title || nearest.type;
+      const diffTime = targetDate - currentZeroed;
+      daysUntilDeadline = Math.max(0, Math.ceil(diffTime / (1000 * 60 * 60 * 24)));
+      upcomingEventType = academicEvents[0].type;
+      upcomingEventTitle = academicEvents[0].title;
     }
 
     return { daysUntilDeadline, isWeekend, upcomingEventType, upcomingEventTitle };
@@ -538,38 +517,40 @@ function DailyCheckin({ onCheckin, events = [] }) {
         }),
       });
 
-      if (!res.ok) throw new Error(`Backend error ${res.status}`);
+      if (!res.ok) {
+        const errorData = await res.json().catch(() => ({}));
+        throw new Error(errorData.error || `Backend error ${res.status}`);
+      }
+
       const result = await res.json();
 
-      setAnalysis(result.analysis);
+      setAnalysis({
+        emotion: result.analysis?.emotion || { label: "neutral", score: 0 },
+        risk_score: result.analysis?.risk_score ?? 0,
+        final_risk: result.analysis?.final_risk || "Low",
+        recommendation: result.analysis?.recommendation || "Take care of yourself today. 💙",
+      });
 
       const emotionMap = {
-        // Joyful
-        joy: "Joyful", excitement: "Joyful", amusement: "Joyful",
-        pride: "Joyful", admiration: "Joyful", love: "Joyful",
-        approval: "Joyful", gratitude: "Joyful", caring: "Joyful",
-        optimism: "Joyful", desire: "Joyful", relief: "Joyful",
-
-        // Calm
-        calm: "Calm",
-
-        // Okay
-        neutral: "Okay", curiosity: "Okay", realization: "Okay", surprise: "Okay",
-
-        // Stressed
-        anxious: "Stressed", fear: "Stressed", nervousness: "Stressed",
-        anger: "Stressed", annoyance: "Stressed", disapproval: "Stressed",
-        disgust: "Stressed", confusion: "Stressed",
-
-        // Sad
-        sadness: "Sad", disappointment: "Sad", grief: "Sad",
-        remorse: "Sad", embarrassment: "Sad",
+        "joy": "Joyful", "excitement": "Joyful", "amusement": "Joyful",
+        "pride": "Joyful", "admiration": "Joyful", "love": "Joyful",
+        "approval": "Joyful", "gratitude": "Joyful", "caring": "Joyful",
+        "optimism": "Joyful", "desire": "Joyful", "relief": "Joyful",
+        "calm": "Calm",
+        "neutral": "Okay", "curiosity": "Okay", "realization": "Okay", "surprise": "Okay",
+        "anxious": "Stressed", "fear": "Stressed", "nervousness": "Stressed",
+        "anger": "Stressed", "annoyance": "Stressed", "disapproval": "Stressed",
+        "disgust": "Stressed", "confusion": "Stressed",
+        "sadness": "Sad", "disappointment": "Sad", "grief": "Sad",
+        "remorse": "Sad", "embarrassment": "Sad"
       };
 
       const detectedLabel = result.analysis?.emotion?.label?.toLowerCase();
-      setSelected(emotionMap[detectedLabel] ?? "Okay");
-    } catch {
-      setAnalysisError("Could not get an AI prediction. Make sure your Python Flask server is running.");
+      setSelected(emotionMap[detectedLabel] || "Okay");
+
+    } catch (err) {
+      console.error("Analysis error:", err);
+      setAnalysisError(err.message || "Could not get an AI prediction. Make sure your Python Flask server is running.");
     } finally {
       setAnalysisLoading(false);
     }
@@ -595,45 +576,92 @@ function DailyCheckin({ onCheckin, events = [] }) {
 
   if (done) {
     const m = moodMeta(selected);
-    const riskColor = { High: C.blushDark, Medium: C.peachDark, Low: C.sageDark };
-    const riskBg = { High: C.blush, Medium: C.peach, Low: C.sage };
+    const riskColor = { High: "#c2607e", Medium: "#c97b35", Low: "#5a9460" };
+    const riskBg = { High: "#f7d6e0", Medium: "#fde8d0", Low: "#d4e9d6" };
+
     return (
       <div style={{ display: "flex", flexDirection: "column", gap: "1rem" }}>
-        <Card style={{ background: C.lavender }}>
+        <Card style={{ background: "#e4daf7" }}>
           <div style={{ textAlign: "center", padding: "2rem 0" }}>
             <div style={{ fontSize: 48, marginBottom: 12 }}>{m.emoji}</div>
-            <h2 style={{ fontFamily: "'Lora', serif", fontStyle: "italic", fontSize: 20, color: C.lavenderDark, fontWeight: 400, margin: "0 0 8px" }}>Check-in successfully recorded!</h2>
-            <p style={{ fontSize: 14, color: C.textMuted, margin: 0 }}>Logged as <strong>{selected}</strong> — text analysis complete.</p>
+            <h2 style={{ fontFamily: "'Lora', serif", fontStyle: "italic", fontSize: 20, color: "#7c5cbf", fontWeight: 400, margin: "0 0 8px" }}>
+              Check-in successfully recorded!
+            </h2>
+            <p style={{ fontSize: 14, color: "#7a6e80", margin: 0 }}>
+              Logged as <strong>{selected}</strong>
+            </p>
+            {analysis && (
+              <p style={{ fontSize: 13, color: "#7a6e80", marginTop: 8 }}>
+                💡 {analysis.emotion?.label && `Detected: ${analysis.emotion.label}`}
+              </p>
+            )}
             <button
-              onClick={() => { setDone(false); setSelected(null); setNote(""); setTags([]); setAnalysis(null); setAnalysisError(null); }}
-              style={{ marginTop: 16, padding: "8px 20px", borderRadius: 10, border: `1px solid ${C.lavenderDark}`, background: C.white, color: C.lavenderDark, cursor: "pointer", fontSize: 13, fontFamily: "'DM Sans', sans-serif" }}
+              onClick={() => {
+                setDone(false);
+                setSelected(null);
+                setNote("");
+                setTags([]);
+                setAnalysis(null);
+                setAnalysisError(null);
+              }}
+              style={{
+                marginTop: 16,
+                padding: "8px 20px",
+                borderRadius: 10,
+                border: "1px solid #7c5cbf",
+                background: "#fff",
+                color: "#7c5cbf",
+                cursor: "pointer",
+                fontSize: 13,
+                fontFamily: "'DM Sans', sans-serif"
+              }}
             >
               Write Another Entry
             </button>
           </div>
         </Card>
 
-        {analysis && (
+        {analysisLoading && (
+          <Card><p style={{ fontSize: 13, color: C.textMuted, textAlign: "center", padding: "1rem 0" }}>🔍 Analysing your entry…</p></Card>
+        )}
+        {analysisError && (
+          <Card style={{ border: `1px solid ${C.blushMid}` }}>
+            <p style={{ fontSize: 13, color: C.blushDark, textAlign: "center", padding: "0.5rem 0" }}>⚠️ {analysisError}</p>
+          </Card>
+        )}
+        {analysis && !analysisLoading && (
           <Card style={{ background: riskBg[analysis.final_risk] ?? C.cream }}>
-            <p style={{ fontSize: 11, letterSpacing: "0.8px", textTransform: "uppercase", color: C.textLight, margin: "0 0 1rem" }}>System Diagnostics</p>
+            <p style={{ fontSize: 11, letterSpacing: "0.8px", textTransform: "uppercase", color: C.textLight, margin: "0 0 1rem" }}>
+              Wellness Analysis
+            </p>
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: "0.75rem", marginBottom: "1rem" }}>
               <div style={{ textAlign: "center" }}>
-                <p style={{ fontSize: 11, color: C.textMuted, margin: "0 0 4px" }}>AI Predicted Mood</p>
-                <p style={{ fontSize: 15, fontWeight: 500, color: C.text, margin: 0, textTransform: "capitalize" }}>{analysis.emotion?.label ?? "—"}</p>
-                <p style={{ fontSize: 11, color: C.textLight, margin: 0 }}>{analysis.emotion?.score ? `${Math.round(analysis.emotion.score * 100)}% match` : ""}</p>
+                <p style={{ fontSize: 11, color: C.textMuted, margin: "0 0 4px" }}>Detected Emotion</p>
+                <p style={{ fontSize: 15, fontWeight: 500, color: C.text, margin: 0, textTransform: "capitalize" }}>
+                  {analysis.emotion?.label ?? "—"}
+                </p>
+                <p style={{ fontSize: 11, color: C.textLight, margin: 0 }}>
+                  {analysis.emotion?.score ? `${Math.round(analysis.emotion.score * 100)}% confidence` : ""}
+                </p>
               </div>
               <div style={{ textAlign: "center" }}>
-                <p style={{ fontSize: 11, color: C.textMuted, margin: "0 0 4px" }}>Combined Risk</p>
-                <p style={{ fontSize: 16, fontWeight: 700, color: riskColor[analysis.final_risk] ?? C.text, margin: 0 }}>{analysis.final_risk}</p>
+                <p style={{ fontSize: 11, color: C.textMuted, margin: "0 0 4px" }}>Risk Level</p>
+                <p style={{ fontSize: 16, fontWeight: 700, color: riskColor[analysis.final_risk] ?? C.text, margin: 0 }}>
+                  {analysis.final_risk}
+                </p>
               </div>
               <div style={{ textAlign: "center" }}>
-                <p style={{ fontSize: 11, color: C.textMuted, margin: "0 0 4px" }}>RF Stress Index</p>
-                <p style={{ fontSize: 15, fontWeight: 500, color: C.text, margin: 0 }}>{analysis.risk_score} / 2</p>
+                <p style={{ fontSize: 11, color: C.textMuted, margin: "0 0 4px" }}>Stress Score</p>
+                <p style={{ fontSize: 15, fontWeight: 500, color: C.text, margin: 0 }}>
+                  {analysis.risk_score} / 2
+                </p>
               </div>
             </div>
             <div style={{ background: C.white, borderRadius: 10, padding: "10px 14px", border: `1px solid ${C.border}` }}>
-              <p style={{ fontSize: 11, color: C.textMuted, margin: "0 0 4px" }}>Schedule Contextual Advice</p>
-              <p style={{ fontSize: 13, color: C.text, margin: 0, lineHeight: 1.5 }}>{analysis.recommendation}</p>
+              <p style={{ fontSize: 11, color: C.textMuted, margin: "0 0 4px" }}>Recommendation</p>
+              <p style={{ fontSize: 13, color: C.text, margin: 0, lineHeight: 1.5 }}>
+                {analysis.recommendation || "Take care of yourself today. 💙"}
+              </p>
             </div>
           </Card>
         )}
@@ -662,23 +690,30 @@ function DailyCheckin({ onCheckin, events = [] }) {
             onClick={handleAnalyzeText}
             disabled={analysisLoading || !note.trim()}
             style={{
-              padding: "10px 24px", borderRadius: 10, border: "none", background: C.lavenderDark, color: C.white,
-              fontSize: 13, fontWeight: 500, cursor: (!note.trim() || analysisLoading) ? "not-allowed" : "pointer",
-              opacity: (!note.trim() || analysisLoading) ? 0.6 : 1, fontFamily: "'DM Sans', sans-serif",
+              padding: "10px 24px",
+              borderRadius: 10,
+              border: "none",
+              background: C.lavenderDark,
+              color: C.white,
+              fontSize: 13,
+              fontWeight: 500,
+              cursor: (!note.trim() || analysisLoading) ? "not-allowed" : "pointer",
+              opacity: (!note.trim() || analysisLoading) ? 0.6 : 1,
+              fontFamily: "'DM Sans', sans-serif",
             }}
           >
-            {analysisLoading ? "Processing text sentiments..." : "Run AI Sentiment Prediction"}
+            {analysisLoading ? "🧠 Processing Text Sentiments..." : "🔍 Run AI Sentiment Prediction"}
           </button>
         </div>
 
         {analysisError && (
-          <p style={{ fontSize: 12, color: C.blushDark, margin: "0 0 1rem", textAlign: "center" }}>{analysisError}</p>
+          <p style={{ fontSize: 12, color: C.blushDark, margin: "0 0 1rem", textAlign: "center" }}>⚠️ {analysisError}</p>
         )}
 
         {analysis && (
-          <div>
+          <div style={{ animation: "fadeIn 0.3s ease-in-out" }}>
             <p style={{ fontSize: 13, color: C.textMuted, marginBottom: 10 }}>
-              The model predicted you feel <strong>{selected}</strong>. Feel free to adjust if needed:
+              💡 The model predicted you feel <strong>{selected}</strong>. Feel free to adjust if needed:
             </p>
             <div style={{ display: "flex", gap: 10, marginBottom: "1.5rem" }}>
               {MOODS.map(m => (
@@ -686,47 +721,21 @@ function DailyCheckin({ onCheckin, events = [] }) {
                   key={m.label}
                   onClick={() => setSelected(m.label)}
                   style={{
-                    flex: 1, padding: "14px 8px", borderRadius: 14,
+                    flex: 1,
+                    padding: "14px 8px",
+                    borderRadius: 14,
                     border: selected === m.label ? `2px solid ${m.dark}` : `2px solid ${C.border}`,
-                    background: selected === m.label ? m.color : C.white, cursor: "pointer", textAlign: "center",
-                    transition: "all 0.2s", transform: selected === m.label ? "translateY(-2px)" : "none",
+                    background: selected === m.label ? m.color : C.white,
+                    cursor: "pointer",
+                    textAlign: "center",
+                    transition: "all 0.2s",
+                    transform: selected === m.label ? "translateY(-2px)" : "none",
                   }}
                 >
                   <div style={{ fontSize: 24 }}>{m.emoji}</div>
                   <span style={{ display: "block", fontSize: 11, color: selected === m.label ? m.dark : C.textMuted, marginTop: 4 }}>{m.label}</span>
                 </button>
               ))}
-            </div>
-
-            {/* Show advice immediately after AI prediction (same card as post-save) */}
-            <div style={{
-              background: ({ High: C.blush, Medium: C.peach, Low: C.sage })[analysis.final_risk] ?? C.cream,
-              borderRadius: 14, padding: "1rem 1.15rem", marginBottom: "1.5rem",
-              border: `1px solid ${C.border}`,
-            }}>
-              <p style={{ fontSize: 11, letterSpacing: "0.8px", textTransform: "uppercase", color: C.textLight, margin: "0 0 0.85rem" }}>Wellness Analysis</p>
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: "0.75rem", marginBottom: "0.85rem" }}>
-                <div style={{ textAlign: "center" }}>
-                  <p style={{ fontSize: 11, color: C.textMuted, margin: "0 0 4px" }}>Detected Emotion</p>
-                  <p style={{ fontSize: 15, fontWeight: 500, color: C.text, margin: 0, textTransform: "capitalize" }}>{analysis.emotion?.label ?? "—"}</p>
-                  <p style={{ fontSize: 11, color: C.textLight, margin: 0 }}>{analysis.emotion?.score ? `${Math.round(analysis.emotion.score * 100)}% confidence` : ""}</p>
-                </div>
-                <div style={{ textAlign: "center" }}>
-                  <p style={{ fontSize: 11, color: C.textMuted, margin: "0 0 4px" }}>Risk Level</p>
-                  <p style={{
-                    fontSize: 16, fontWeight: 700, margin: 0,
-                    color: ({ High: C.blushDark, Medium: C.peachDark, Low: C.sageDark })[analysis.final_risk] ?? C.text,
-                  }}>{analysis.final_risk}</p>
-                </div>
-                <div style={{ textAlign: "center" }}>
-                  <p style={{ fontSize: 11, color: C.textMuted, margin: "0 0 4px" }}>Stress Score</p>
-                  <p style={{ fontSize: 15, fontWeight: 500, color: C.text, margin: 0 }}>{analysis.risk_score} / 2</p>
-                </div>
-              </div>
-              <div style={{ background: C.white, borderRadius: 10, padding: "10px 14px", border: `1px solid ${C.border}` }}>
-                <p style={{ fontSize: 11, color: C.textMuted, margin: "0 0 4px" }}>Recommendation</p>
-                <p style={{ fontSize: 13, color: C.text, margin: 0, lineHeight: 1.5 }}>{analysis.recommendation}</p>
-              </div>
             </div>
 
             <p style={{ fontSize: 13, color: C.textMuted, marginBottom: 8 }}>Tags</p>
@@ -736,11 +745,15 @@ function DailyCheckin({ onCheckin, events = [] }) {
                   key={t}
                   onClick={() => toggleTag(t)}
                   style={{
-                    padding: "6px 14px", borderRadius: 20, fontSize: 12, cursor: "pointer",
+                    padding: "6px 14px",
+                    borderRadius: 20,
+                    fontSize: 12,
+                    cursor: "pointer",
                     border: `1px solid ${tags.includes(t) ? C.blushMid : C.border}`,
                     background: tags.includes(t) ? C.blush : C.white,
                     color: tags.includes(t) ? C.blushDark : C.textMuted,
-                    fontFamily: "'DM Sans', sans-serif", transition: "all 0.2s",
+                    fontFamily: "'DM Sans', sans-serif",
+                    transition: "all 0.2s",
                   }}
                 >
                   {t}
@@ -918,32 +931,27 @@ function WeeklyReview() {
   const [type, setType] = useState("weekly");
   const [answers, setAnswers] = useState({});
   const [done, setDone] = useState(false);
-  // INTEGRATION: analysis state
-  const [analysis, setAnalysis]               = useState(null);
+  const [analysis, setAnalysis] = useState(null);
   const [analysisLoading, setAnalysisLoading] = useState(false);
-  const [analysisError, setAnalysisError]     = useState(null);
+  const [analysisError, setAnalysisError] = useState(null);
   const questions = type === "weekly" ? WEEKLY_Q : MONTHLY_Q;
   const avg = Object.values(answers).length ? (Object.values(answers).reduce((a, b) => a + b, 0) / Object.values(answers).length).toFixed(1) : null;
 
-  // INTEGRATION: Map questionnaire answers to backend field names.
-  // Values are sent as raw 1-5 — the backend scales them to the dataset range.
-  // Weekly Q: study(0), social(1), self_care(2), confidence(3), balance(4)
-  // Monthly Q: academic(0), sleep(1), motivation(2), financial(3), support(4)
   const buildQuestionnaire = () => {
     if (type === "weekly") {
       return {
-        academic_pressure: answers[0] ?? 3,   // study schedule (low score = high pressure)
+        academic_pressure: answers[0] ?? 3,
         social_support:    answers[1] ?? 3,
-        sleep_quality:     answers[2] ?? 3,   // self-care proxy
-        self_esteem:       answers[3] ?? 3,   // confidence proxy
-        anxiety_level:     answers[4] ?? 3,   // overall balance (low score = high anxiety)
+        sleep_quality:     answers[2] ?? 3,
+        self_esteem:       answers[3] ?? 3,
+        anxiety_level:     answers[4] ?? 3,
       };
     }
     return {
       academic_pressure: answers[0] ?? 3,
       sleep_quality:     answers[1] ?? 3,
-      self_esteem:       answers[2] ?? 3,   // motivation proxy
-      anxiety_level:     answers[3] ?? 3,   // financial stress proxy
+      self_esteem:       answers[2] ?? 3,
+      anxiety_level:     answers[3] ?? 3,
       social_support:    answers[4] ?? 3,
     };
   };
@@ -967,55 +975,55 @@ function WeeklyReview() {
     const riskColor = { High: C.blushDark, Medium: C.peachDark, Low: C.sageDark };
     const riskBg    = { High: C.blush,     Medium: C.peach,     Low: C.sage     };
     return (
-    <div>
-      <div style={{ marginBottom: "2rem" }}>
-        <h1 style={{ fontFamily: "'Lora', serif", fontSize: 26, color: C.text, fontWeight: 500, margin: 0 }}>Weekly Review</h1>
-        <p style={{ fontSize: 14, color: C.textMuted, marginTop: 4 }}>Reflect on your week</p>
-      </div>
-      <div style={{ display: "flex", flexDirection: "column", gap: "1rem" }}>
-        <Card style={{ background: C.sage }}>
-          <div style={{ textAlign: "center", padding: "1.5rem 0" }}>
-            <div style={{ fontSize: 40, marginBottom: 8 }}>🌿</div>
-            <p style={{ fontFamily: "'Lora', serif", fontStyle: "italic", fontSize: 20, color: C.sageDark }}>Score: {avg} / 5</p>
-            <p style={{ fontSize: 14, color: C.sageDark }}>Your {type} reflection is recorded!</p>
-            <button onClick={() => { setDone(false); setAnswers({}); setAnalysis(null); setAnalysisError(null); }} style={{ marginTop: 12, padding: "8px 20px", borderRadius: 10, border: `1px solid ${C.sageDark}`, background: C.white, color: C.sageDark, cursor: "pointer", fontFamily: "'DM Sans', sans-serif", fontSize: 13 }}>Retake</button>
-          </div>
-        </Card>
-        {analysisLoading && (
-          <Card><p style={{ fontSize: 13, color: C.textMuted, textAlign: "center", padding: "1rem 0" }}>🔍 Analysing your responses…</p></Card>
-        )}
-        {analysisError && (
-          <Card style={{ border: `1px solid ${C.blushMid}` }}>
-            <p style={{ fontSize: 13, color: C.blushDark, textAlign: "center", padding: "0.5rem 0" }}>⚠️ {analysisError}</p>
-          </Card>
-        )}
-        {analysis && !analysisLoading && (
-          <Card style={{ background: riskBg[analysis.final_risk] ?? C.cream }}>
-            <p style={{ fontSize: 11, letterSpacing: "0.8px", textTransform: "uppercase", color: C.textLight, margin: "0 0 1rem" }}>Wellness Analysis</p>
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: "0.75rem", marginBottom: "1rem" }}>
-              <div style={{ textAlign: "center" }}>
-                <p style={{ fontSize: 11, color: C.textMuted, margin: "0 0 4px" }}>Detected Emotion</p>
-                <p style={{ fontSize: 15, fontWeight: 500, color: C.text, margin: 0, textTransform: "capitalize" }}>{analysis.emotion?.label ?? "—"}</p>
-                <p style={{ fontSize: 11, color: C.textLight, margin: 0 }}>{analysis.emotion?.score ? `${Math.round(analysis.emotion.score * 100)}% confidence` : ""}</p>
-              </div>
-              <div style={{ textAlign: "center" }}>
-                <p style={{ fontSize: 11, color: C.textMuted, margin: "0 0 4px" }}>Risk Level</p>
-                <p style={{ fontSize: 16, fontWeight: 700, color: riskColor[analysis.final_risk] ?? C.text, margin: 0 }}>{analysis.final_risk}</p>
-              </div>
-              <div style={{ textAlign: "center" }}>
-                <p style={{ fontSize: 11, color: C.textMuted, margin: "0 0 4px" }}>Stress Score</p>
-                <p style={{ fontSize: 15, fontWeight: 500, color: C.text, margin: 0 }}>{analysis.risk_score} / 2</p>
-              </div>
-            </div>
-            <div style={{ background: C.white, borderRadius: 10, padding: "10px 14px", border: `1px solid ${C.border}` }}>
-              <p style={{ fontSize: 11, color: C.textMuted, margin: "0 0 4px" }}>Recommendation</p>
-              <p style={{ fontSize: 13, color: C.text, margin: 0, lineHeight: 1.5 }}>{analysis.recommendation}</p>
+      <div>
+        <div style={{ marginBottom: "2rem" }}>
+          <h1 style={{ fontFamily: "'Lora', serif", fontSize: 26, color: C.text, fontWeight: 500, margin: 0 }}>Weekly Review</h1>
+          <p style={{ fontSize: 14, color: C.textMuted, marginTop: 4 }}>Reflect on your week</p>
+        </div>
+        <div style={{ display: "flex", flexDirection: "column", gap: "1rem" }}>
+          <Card style={{ background: C.sage }}>
+            <div style={{ textAlign: "center", padding: "1.5rem 0" }}>
+              <div style={{ fontSize: 40, marginBottom: 8 }}>🌿</div>
+              <p style={{ fontFamily: "'Lora', serif", fontStyle: "italic", fontSize: 20, color: C.sageDark }}>Score: {avg} / 5</p>
+              <p style={{ fontSize: 14, color: C.sageDark }}>Your {type} reflection is recorded!</p>
+              <button onClick={() => { setDone(false); setAnswers({}); setAnalysis(null); setAnalysisError(null); }} style={{ marginTop: 12, padding: "8px 20px", borderRadius: 10, border: `1px solid ${C.sageDark}`, background: C.white, color: C.sageDark, cursor: "pointer", fontFamily: "'DM Sans', sans-serif", fontSize: 13 }}>Retake</button>
             </div>
           </Card>
-        )}
+          {analysisLoading && (
+            <Card><p style={{ fontSize: 13, color: C.textMuted, textAlign: "center", padding: "1rem 0" }}>🔍 Analysing your responses…</p></Card>
+          )}
+          {analysisError && (
+            <Card style={{ border: `1px solid ${C.blushMid}` }}>
+              <p style={{ fontSize: 13, color: C.blushDark, textAlign: "center", padding: "0.5rem 0" }}>⚠️ {analysisError}</p>
+            </Card>
+          )}
+          {analysis && !analysisLoading && (
+            <Card style={{ background: riskBg[analysis.final_risk] ?? C.cream }}>
+              <p style={{ fontSize: 11, letterSpacing: "0.8px", textTransform: "uppercase", color: C.textLight, margin: "0 0 1rem" }}>Wellness Analysis</p>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: "0.75rem", marginBottom: "1rem" }}>
+                <div style={{ textAlign: "center" }}>
+                  <p style={{ fontSize: 11, color: C.textMuted, margin: "0 0 4px" }}>Detected Emotion</p>
+                  <p style={{ fontSize: 15, fontWeight: 500, color: C.text, margin: 0, textTransform: "capitalize" }}>{analysis.emotion?.label ?? "—"}</p>
+                  <p style={{ fontSize: 11, color: C.textLight, margin: 0 }}>{analysis.emotion?.score ? `${Math.round(analysis.emotion.score * 100)}% confidence` : ""}</p>
+                </div>
+                <div style={{ textAlign: "center" }}>
+                  <p style={{ fontSize: 11, color: C.textMuted, margin: "0 0 4px" }}>Risk Level</p>
+                  <p style={{ fontSize: 16, fontWeight: 700, color: riskColor[analysis.final_risk] ?? C.text, margin: 0 }}>{analysis.final_risk}</p>
+                </div>
+                <div style={{ textAlign: "center" }}>
+                  <p style={{ fontSize: 11, color: C.textMuted, margin: "0 0 4px" }}>Stress Score</p>
+                  <p style={{ fontSize: 15, fontWeight: 500, color: C.text, margin: 0 }}>{analysis.risk_score} / 2</p>
+                </div>
+              </div>
+              <div style={{ background: C.white, borderRadius: 10, padding: "10px 14px", border: `1px solid ${C.border}` }}>
+                <p style={{ fontSize: 11, color: C.textMuted, margin: "0 0 4px" }}>Recommendation</p>
+                <p style={{ fontSize: 13, color: C.text, margin: 0, lineHeight: 1.5 }}>{analysis.recommendation}</p>
+              </div>
+            </Card>
+          )}
+        </div>
       </div>
-    </div>
-  );
+    );
   }
 
   return (
@@ -1025,10 +1033,9 @@ function WeeklyReview() {
         <p style={{ fontSize: 14, color: C.textMuted, marginTop: 4 }}>Reflect on your week</p>
       </div>
       <Card>
-        {/* Progress bar */}
         <div style={{ display: "flex", gap: 6, marginBottom: "1.5rem" }}>
           {questions.map((_, i) => (
-            <div key={i} style={{ flex: 1, height: 4, borderRadius: 2, background: answers[i] !== undefined ? C.sageMid : answers[i] !== undefined - 1 ? C.lavenderMid : C.border }} />
+            <div key={i} style={{ flex: 1, height: 4, borderRadius: 2, background: answers[i] !== undefined ? C.sageMid : C.border }} />
           ))}
         </div>
         <div style={{ display: "flex", gap: 6, background: C.white, border: `1px solid ${C.border}`, borderRadius: 12, padding: 5, width: "fit-content", marginBottom: "1.5rem" }}>
@@ -1068,7 +1075,6 @@ function Trends({ journalEntries }) {
   const [period, setPeriod] = useState("month");
   const today = new Date();
 
-  // Filter entries for selected period
   const filtered = journalEntries.filter(e => {
     const d = new Date(e.date + "T00:00:00");
     if (period === "week") return (today - d) / 86400000 <= 7;
@@ -1076,16 +1082,13 @@ function Trends({ journalEntries }) {
     return true;
   });
 
-  // For month graph: deduplicate by date, last 30 days
   const byDate = {};
   [...filtered].sort((a, b) => a.time.localeCompare(b.time)).forEach(e => { byDate[e.date] = e; });
   const monthData = Object.values(byDate).sort((a, b) => a.date.localeCompare(b.date));
 
-  // For day/week pie: all entries in period
   const moodCounts = {};
   filtered.forEach(e => { moodCounts[e.mood] = (moodCounts[e.mood] || 0) + 1; });
 
-  // Today's entries only for day chart
   const todayStr = today.toISOString().split("T")[0];
   const todayEntries = journalEntries.filter(e => e.date === todayStr);
   const weekEntries = journalEntries.filter(e => (today - new Date(e.date + "T00:00:00")) / 86400000 <= 7);
@@ -1101,7 +1104,6 @@ function Trends({ journalEntries }) {
         <p style={{ fontSize: 14, color: C.textMuted, marginTop: 4 }}>Track your emotional patterns over time</p>
       </div>
 
-      {/* Period tabs */}
       <div style={{ display: "flex", gap: 6, background: C.white, border: `1px solid ${C.border}`, borderRadius: 12, padding: 5, width: "fit-content", marginBottom: "2rem" }}>
         {[["week", "Last 7 days"], ["month", "Last 30 days"], ["all", "All time"]].map(([v, label]) => (
           <button key={v} onClick={() => setPeriod(v)} style={{
@@ -1112,7 +1114,6 @@ function Trends({ journalEntries }) {
         ))}
       </div>
 
-      {/* Mood trend line — pulls from journal history */}
       <div style={{ marginBottom: "1.25rem" }}>
         <Card>
           <CardTitle>Mood over {period === "week" ? "last 7 days" : period === "month" ? "last 30 days" : "all time"} (from journal history)</CardTitle>
@@ -1121,21 +1122,18 @@ function Trends({ journalEntries }) {
       </div>
 
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "1.25rem", marginBottom: "1.25rem" }}>
-        {/* Today's mood chart */}
         <Card>
           <CardTitle>Today's mood</CardTitle>
           <MoodDoughnut moodCounts={todayCounts} total={todayEntries.length} />
           {todayEntries.length === 0 && <p style={{ fontSize: 12, color: C.textMuted, textAlign: "center", marginTop: 4 }}>No entries today yet</p>}
         </Card>
 
-        {/* This week's mood chart */}
         <Card>
           <CardTitle>This week's mood</CardTitle>
           <MoodDoughnut moodCounts={weekCounts} total={weekEntries.length} />
         </Card>
       </div>
 
-      {/* All-time summary */}
       <Card>
         <CardTitle>Mood breakdown — {filtered.length} entries in period</CardTitle>
         <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
@@ -1179,24 +1177,6 @@ function CalendarPage({ events, setEvents }) {
     return events.filter(e => e.date === dayToStr(day));
   };
 
-  const openForm = () => {
-    if (showForm) {
-      setShowForm(false);
-      return;
-    }
-    const prefill = selectedDay ? dayToStr(selectedDay) : todayStr;
-    setForm({ title: "", date: prefill, type: "Exam", reminder: false });
-    setShowForm(true);
-  };
-
-  const selectDay = day => {
-    if (!day) return;
-    const ds = dayToStr(day);
-    setSelectedDay(prev => (prev === day ? null : day));
-    // Keep the add-event date in sync with the clicked day
-    setForm(f => ({ ...f, date: ds }));
-  };
-
   const handleAdd = () => {
     if (!form.title.trim() || !form.date) return;
     setEvents(ev => [...ev, {
@@ -1224,7 +1204,6 @@ function CalendarPage({ events, setEvents }) {
       </div>
 
       <div style={{ display: "grid", gridTemplateColumns: "1.4fr 1fr", gap: "1.25rem" }}>
-        {/* Calendar grid */}
         <Card>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "1rem" }}>
             <button onClick={() => setViewDate(new Date(year, month - 1, 1))} style={{ background: "none", border: "none", cursor: "pointer", fontSize: 20, color: C.textMuted, padding: "0 4px" }}>‹</button>
@@ -1241,7 +1220,7 @@ function CalendarPage({ events, setEvents }) {
               const isToday = day === today.getDate() && month === today.getMonth() && year === today.getFullYear();
               const isSelected = day === selectedDay;
               return (
-                <div key={i} onClick={() => selectDay(day)} style={{
+                <div key={i} onClick={() => day && setSelectedDay(isSelected ? null : day)} style={{
                   minHeight: 38, borderRadius: 8, padding: "3px 4px", cursor: day ? "pointer" : "default",
                   background: isSelected ? C.lavenderMid : isToday ? C.lavender : day ? "white" : "transparent",
                   border: isToday ? `1px solid ${C.lavenderDark}` : isSelected ? `1px solid ${C.lavenderDark}` : "1px solid transparent",
@@ -1257,20 +1236,19 @@ function CalendarPage({ events, setEvents }) {
             })}
           </div>
 
-          {/* Selected day events */}
           {selectedDay && (
             <div style={{ marginTop: "1rem", borderTop: `1px solid ${C.border}`, paddingTop: "1rem" }}>
               <p style={{ fontSize: 12, color: C.textMuted, margin: "0 0 8px" }}>
                 {new Date(selectedDayStr + "T12:00:00").toLocaleDateString("en-IN", { weekday: "long", day: "numeric", month: "long" })}
               </p>
               {selectedEvents.length === 0 ? (
-                <p style={{ fontSize: 13, color: C.textLight, fontStyle: "italic" }}>No events on this day — open the form below to add one</p>
+                <p style={{ fontSize: 13, color: C.textLight, fontStyle: "italic" }}>No events on this day</p>
               ) : selectedEvents.map(e => (
                 <div key={e.id} style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 10px", borderRadius: 10, background: C.cream, border: `1px solid ${C.border}`, marginBottom: 6 }}>
                   <div style={{ width: 8, height: 8, borderRadius: "50%", background: e.color, flexShrink: 0 }} />
                   <div style={{ flex: 1 }}>
                     <p style={{ margin: 0, fontSize: 13, fontWeight: 500, color: C.text }}>{e.title}</p>
-                    <p style={{ margin: 0, fontSize: 11, color: C.textMuted }}>{e.type}{e.reminder ? " · Reminder on" : ""}</p>
+                    <p style={{ margin: 0, fontSize: 11, color: C.textMuted }}>{e.type}{e.reminder ? " · 🔔 Reminder on" : ""}</p>
                   </div>
                   <button onClick={() => handleDelete(e.id)} style={{ background: "none", border: "none", cursor: "pointer", fontSize: 12, color: C.textLight, padding: "2px 6px" }}>✕</button>
                 </div>
@@ -1278,8 +1256,7 @@ function CalendarPage({ events, setEvents }) {
             </div>
           )}
 
-          {/* Add event */}
-          <button onClick={openForm} style={{
+          <button onClick={() => setShowForm(!showForm)} style={{
             width: "100%", padding: "9px 0", borderRadius: 10, marginTop: "1rem",
             border: `1px dashed ${C.blushMid}`, background: C.blush, color: C.blushDark,
             fontFamily: "'DM Sans', sans-serif", fontWeight: 500, fontSize: 13, cursor: "pointer",
@@ -1294,7 +1271,6 @@ function CalendarPage({ events, setEvents }) {
                 placeholder="Event title (e.g. Math Final Exam)"
                 style={{ width: "100%", boxSizing: "border-box", padding: "9px 12px", borderRadius: 10, border: `1px solid ${C.border}`, fontSize: 13, background: C.white, color: C.text, outline: "none", marginBottom: 8, fontFamily: "'DM Sans', sans-serif" }}
               />
-
               <p style={{ fontSize: 12, color: C.textMuted, margin: "0 0 6px" }}>
                 Date — click a day on the calendar, or use the picker
               </p>
@@ -1339,7 +1315,6 @@ function CalendarPage({ events, setEvents }) {
                   Selected: {new Date(form.date + "T12:00:00").toLocaleDateString("en-IN", { weekday: "short", day: "numeric", month: "long", year: "numeric" })}
                 </p>
               )}
-
               <div style={{ display: "flex", gap: 6, marginBottom: 10 }}>
                 {["Exam", "Assignment", "Reminder", "Other"].map(t => (
                   <button key={t} onClick={() => setForm(f => ({ ...f, type: t }))} style={{
@@ -1351,14 +1326,13 @@ function CalendarPage({ events, setEvents }) {
               </div>
               <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 13, color: C.textMuted, marginBottom: 10, cursor: "pointer" }}>
                 <input type="checkbox" checked={form.reminder} onChange={e => setForm(f => ({ ...f, reminder: e.target.checked }))} />
-                Notify me 1 day before
+                🔔 Notify me 1 day before
               </label>
               <SubmitBtn onClick={handleAdd} disabled={!form.title.trim() || !form.date} color={C.blushDark}>Add Event</SubmitBtn>
             </div>
           )}
         </Card>
 
-        {/* Upcoming list */}
         <div>
           <Card>
             <CardTitle>Upcoming events</CardTitle>
@@ -1372,7 +1346,7 @@ function CalendarPage({ events, setEvents }) {
                   <div style={{ flex: 1 }}>
                     <p style={{ margin: 0, fontSize: 13, fontWeight: 500, color: C.text }}>{e.title}</p>
                     <p style={{ margin: 0, fontSize: 11, color: C.textMuted }}>{e.type} · {e.date}</p>
-                    {e.reminder && <p style={{ margin: "2px 0 0", fontSize: 10, color: C.lavenderDark }}>Reminder set</p>}
+                    {e.reminder && <p style={{ margin: "2px 0 0", fontSize: 10, color: C.lavenderDark }}>🔔 Reminder set</p>}
                   </div>
                   <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 6 }}>
                     <span style={{ fontSize: 11, fontWeight: 500, padding: "3px 8px", borderRadius: 8, background: diff <= 2 ? C.peach : C.lavender, color: diff <= 2 ? C.peachDark : C.lavenderDark, whiteSpace: "nowrap" }}>

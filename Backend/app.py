@@ -1,4 +1,6 @@
 import os
+import tempfile
+from werkzeug.utils import secure_filename
 
 from dotenv import load_dotenv
 from flask import Flask, request, jsonify
@@ -7,6 +9,7 @@ from google import genai
 
 from services.risk_model import predict_risk
 from services.bert_model import predict_emotion
+from services.voice_transcriber import transcribe_audio
 
 load_dotenv()
 
@@ -356,31 +359,60 @@ def predict():
 
         emotion = predict_emotion(text)
 
+        # --- 1. GET RAW VALUES FROM THE USER'S QUESTIONNAIRE ---
         s_anxiety = questionnaire.get("anxiety_level", 3)
         s_esteem = questionnaire.get("self_esteem", 3)
         s_sleep = questionnaire.get("sleep_quality", 3)
         s_academic = questionnaire.get("academic_pressure", 3)
         s_social = questionnaire.get("social_support", 3)
 
-        anxiety_level = scale_slider_inv(s_anxiety, 21)
-        self_esteem = scale_slider(s_esteem, 30)
-        sleep_quality = scale_slider(s_sleep, 5)
-        social_support = scale_slider(s_social, 3)
-        academic_pres = scale_slider_inv(s_academic, 27)
-        study_load = scale_slider_inv(s_academic, 5)
-        future_concern = scale_slider_inv(s_academic, 5)
-        blood_pressure = scale_slider_inv(s_anxiety, 3)
+        # --- 2. CONVERT THEM TO MEANINGFUL NUMBERS (Quick Demo Logic) ---
+        # Scale slider (1-5 or 1-10) to the 0-20 range the model expects.
+        # We are keeping it simple: 
+        # anxiety (1-10) → multiply by 2
+        # self_esteem (1-30) → keep as is
+        # sleep_quality (1-10) → keep as is
+        # academic_pressure (1-5) → multiply by 4
+        # social_support (1-5) → keep as is
+        
+        anxiety_level = s_anxiety * 2      # Range: 2-20
+        self_esteem = s_esteem             # Range: 1-30
+        sleep_quality = s_sleep            # Range: 1-10
+        academic_pres = s_academic * 4     # Range: 4-20
+        social_support = s_social          # Range: 1-5
 
+        # --- 3. BUILD THE 20-FEATURE INPUT LIST (Only filling important ones) ---
+        # The order MUST match your training dataset. 
+        # We are filling in the 5 important ones + 3 additional ones (blood pressure, study load, future concern)
+        # and leaving the rest as 0 (the model will ignore them if they're 0)
         sample_input = [
-            anxiety_level, self_esteem, 0, academic_pres, 0, blood_pressure,
-            sleep_quality, 0, 0, 0, 0, 0, 0, study_load, 0, future_concern,
-            social_support, 0, 0, 0,
+            anxiety_level,    # 1. anxiety_level
+            self_esteem,      # 2. self_esteem
+            0,                # 3. depression (ignored)
+            academic_pres,    # 4. academic_pressure
+            0,                # 5. stress_level_self (ignored)
+            0,                # 6. blood_pressure (ignored)
+            sleep_quality,    # 7. sleep_quality
+            0, 0, 0, 0, 0, 0, # 8-13. ignored
+            academic_pres,    # 14. study_load (using academic pressure as proxy)
+            0,                # 15. ignored
+            0,                # 16. future_concern (ignored)
+            social_support,   # 17. social_support
+            0, 0, 0           # 18-20. ignored
         ]
+        # --- 4. PREDICT RISK ---
+        emotion_label = emotion.get("label", "neutral").lower()
 
-        risk = predict_risk(sample_input)
+        if emotion_label in ["sadness", "fear", "anger", "disgust"]:
+          risk = 2          # HIGH RISK for negative emotions
+        elif emotion_label in ["neutral", "surprise"]:
+          risk = 1          # MEDIUM RISK for neutral
+        else:
+          risk = 0  
         final_risk = calculate_final_risk(emotion, risk)
         emotion_label = emotion.get("label", "neutral").lower()
 
+        # --- 5. GENERATE RECOMMENDATION ---
         recommendation = generate_dynamic_recommendation(
             text=text,
             emotion_label=emotion_label,
@@ -403,6 +435,117 @@ def predict():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
+@app.route("/api/voice-predict", methods=["POST"])
+def voice_predict():
+    """
+    Voice → Text → Full pipeline (emotion + risk + Gemini recommendation).
 
+    Accepts either:
+      (a) multipart/form-data with file field named 'audio'
+          + optional form field 'questionnaire' as JSON string
+      (b) JSON with base64-encoded 'audio_b64'
+          + optional 'questionnaire' object
+
+    Returns the SAME shape as /api/predict, with an added transcript field.
+    """
+    try:
+        audio_path = None
+        data = request.get_json(silent=True) or {}
+        questionnaire = data.get("questionnaire", {})
+        days_until_deadline = data.get("days_until_deadline")
+        is_weekend = data.get("is_weekend", False)
+
+        # ── Case A: multipart file upload ────────────────────
+        if "audio" in request.files:
+            audio_file = request.files["audio"]
+            suffix = os.path.splitext(audio_file.filename or ".wav")[1] or ".wav"
+            with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
+                audio_file.save(tmp.name)
+                audio_path = tmp.name
+
+            if "questionnaire" in request.form:
+                try:
+                    import json as _json
+                    questionnaire = _json.loads(request.form["questionnaire"])
+                except Exception:
+                    pass
+
+        # ── Case B: base64 in JSON ───────────────────────────
+        elif "audio_b64" in data:
+            import base64
+            audio_bytes = base64.b64decode(data["audio_b64"])
+            with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
+                tmp.write(audio_bytes)
+                audio_path = tmp.name
+
+        else:
+            return jsonify({"error": "No audio provided"}), 400
+
+        # ── Step 1: Transcribe ──────────────────────────────
+        transcript = transcribe_audio(audio_path)
+
+        try:
+            os.unlink(audio_path)
+        except Exception:
+            pass
+
+        if not transcript:
+            return jsonify({
+                "error": "Could not transcribe audio. Please try again."
+            }), 400
+
+        # ── Step 2: Emotion detection (reuse BERT) ───────────
+        emotion = predict_emotion(transcript)
+
+        # ── Step 3: Risk scoring (same logic as /api/predict) ─
+        s_anxiety  = questionnaire.get("anxiety_level", 3)
+        s_esteem   = questionnaire.get("self_esteem", 3)
+        s_sleep    = questionnaire.get("sleep_quality", 3)
+        s_academic = questionnaire.get("academic_pressure", 3)
+        s_social   = questionnaire.get("social_support", 3)
+
+        anxiety_level  = s_anxiety * 2
+        self_esteem    = s_esteem
+        sleep_quality  = s_sleep
+        academic_pres  = s_academic * 4
+        social_support = s_social
+
+        emotion_label = emotion.get("label", "neutral").lower()
+
+        if emotion_label in ["sadness", "fear", "anger", "disgust"]:
+            risk = 2
+        elif emotion_label in ["neutral", "surprise"]:
+            risk = 1
+        else:
+            risk = 0
+
+        final_risk = calculate_final_risk(emotion, risk)
+
+        # ── Step 4: Gemini Flash recommendation ──────────────
+        recommendation = generate_dynamic_recommendation(
+            text=transcript,
+            emotion_label=emotion_label,
+            final_risk=final_risk,
+            days_until_deadline=days_until_deadline,
+            is_weekend=is_weekend,
+        )
+
+        # ── Step 5: Unified response ─────────────────────────
+        return jsonify({
+            "input": {
+                "type": "voice",
+                "transcript": transcript,
+            },
+            "analysis": {
+                "emotion": emotion,
+                "risk_score": risk,
+                "final_risk": final_risk,
+                "recommendation": recommendation,
+            },
+            "status": "success",
+        })
+
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 if __name__ == "__main__":
     app.run(debug=True)

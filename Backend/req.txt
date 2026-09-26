@@ -1,0 +1,5 @@
+openai-whisper==20231117
+transformers==5.3.0
+torch==2.11.0
+sounddevice==0.4.6
+scipy==1.15.3
